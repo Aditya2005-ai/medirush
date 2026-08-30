@@ -1,0 +1,22 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; background: #0a0a0a; color: #fff; font-family: 'Inter', sans-serif; }
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+/* Leaflet fix */
+.leaflet-container { background: #1a1a1a !important; }
+.leaflet-tile { filter: invert(1) hue-rotate(180deg) brightness(0.85) saturate(0.9); }
+.leaflet-control-zoom a { background: #1e1e1e !important; color: #fff !important; border-color: rgba(255,255,255,0.1) !important; }
+.leaflet-popup-content-wrapper { background: #1e1e1e; color: #fff; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; }
+.leaflet-popup-tip { background: #1e1e1e; }
+
+@keyframes pulseRing { 0%{opacity:1;transform:scale(0.6)} 100%{opacity:0;transform:scale(1)} }
+@keyframes spin { to{transform:rotate(360deg)} }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+@keyframes slideUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+@keyframes fadeIn { from{opacity:0} to{opacity:1} }
+@keyframes sheetUp { from{opacity:0;transform:translateY(30px)} to{opacity:1;transform:translateY(0)} }
+@keyframes sosPulse { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0.5)} 50%{box-shadow:0 0 0 24px rgba(239,68,68,0)} }
+@keyframes broadcast { 0%{transform:scale(0.8);opacity:1} 100%{transform:scale(2.2);opacity:0} }

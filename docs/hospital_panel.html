@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Hospital Panel (MediRush)</title>
+  <style>body{font-family:Arial;padding:20px} .card{border:1px solid #ddd;padding:12px;margin:8px 0;border-radius:6px}</style>
+</head>
+<body>
+  <h2>Hospital Panel (Test)</h2>
+  <p>Connects to Socket.IO and listens for emergency:notify events.</p>
+  <label>Hospital ID: <input id="hid" value="h1" /></label>
+  <button id="connect">Connect</button>
+  <div id="status"></div>
+  <div id="events"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    let socket, hospitalId
+    document.getElementById('connect').onclick = ()=>{
+      hospitalId = document.getElementById('hid').value.trim() || 'h1'
+      socket = io(location.origin)
+      socket.on('connect', ()=>{ document.getElementById('status').innerText='Connected as '+socket.id; socket.emit('register_hospital',{hospitalId}) })
+      socket.on('emergency:notify', payload => onNotify(payload))
+      socket.on('disconnect', ()=>document.getElementById('status').innerText='Disconnected')
+    }
+
+    function onNotify(p){
+      const id = 'e-'+Math.random().toString(36).slice(2,9)
+      const el = document.createElement('div'); el.className='card'; el.id=id
+      el.innerHTML = `<strong>Emergency</strong><div>Session: ${p.sessionId||p.emergencyId||'--'}</div><div>user: ${p.userName||'unknown'}</div><div>Location: ${p.lat||p.location?.lat}, ${p.lng||p.location?.lng}</div><div>Range: ${p.range||p.radius_meters||''}m</div>`
+      const accept = document.createElement('button'); accept.innerText='Accept'; accept.onclick=()=>{ socket.emit('hospital_response',{emergencyId:p.sessionId||p.emergencyId, action:'accept', hospitalId:hospitalId}); el.style.opacity=0.6; accept.disabled=true }
+      const reject = document.createElement('button'); reject.innerText='Reject'; reject.onclick=()=>{ socket.emit('hospital_response',{emergencyId:p.sessionId||p.emergencyId, action:'reject', hospitalId:hospitalId}); el.remove() }
+      el.appendChild(document.createElement('br'))
+      el.appendChild(accept); el.appendChild(reject)
+      document.getElementById('events').prepend(el)
+    }
+  </script>
+</body>
+</html>

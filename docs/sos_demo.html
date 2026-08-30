@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><title>MediRush SOS Demo</title></head>
+<body>
+  <h3>MediRush SOS Demo</h3>
+  <p>This demo shows both Socket.IO (fast) and API (persistent) flows.</p>
+  <label>Lat: <input id="lat" value="28.6139" /></label>
+  <label>Lng: <input id="lng" value="77.2090" /></label>
+  <label>Range (meters): <input id="range" value="10000" /></label>
+  <br/>
+  <button id="socket-sos">Trigger SOS (Socket)</button>
+  <button id="api-sos">Trigger SOS (API + DB)</button>
+  <div id="log"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const log = (t)=>{ const d=document.createElement('div'); d.innerText = t; document.getElementById('log').prepend(d) }
+    let socket
+    document.getElementById('socket-sos').onclick = ()=>{
+      socket = io(location.origin)
+      socket.on('connect', ()=>{ log('Socket connected: '+socket.id)
+        const lat=document.getElementById('lat').value, lng=document.getElementById('lng').value, range=document.getElementById('range').value
+        socket.emit('sos_trigger',{emergencyId,lat,lng,range,userName:'Demo user'})
+      })
+      socket.on('session_created', s=>{ log('Session created: '+s.sessionId) })
+      socket.on('search_started', d=>{ log('Search started. Nearby: '+d.hospitals.length) })
+      socket.on('hospital_response', r=>{ log('Hospital response: '+r.name+' accepted:'+r.accepted) })
+    }
+
+    document.getElementById('api-sos').onclick = async ()=>{
+      const lat=document.getElementById('lat').value, lng=document.getElementById('lng').value, range=document.getElementById('range').value
+      // Optionally create a socket session so hospital responses can be seen in browser
+      socket = io(location.origin)
+      socket.on('connect', ()=>{ log('Socket connected for API flow: '+socket.id); socket.emit('sos_trigger',{lat,lng,range,userName:'Demo user'}) })
+      let sessionId
+      socket.on('session_created', s=>{ sessionId = s.sessionId; log('Linked session: '+sessionId);
+        // Create persistent emergency linked to the session
+        fetch('/api/v1/emergency',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ user_id: null, lat, lng, radius_meters: parseInt(range), sessionId }) })
+        .then(r=>r.json()).then(j=> log('API response: '+JSON.stringify(j)))
+      })
+
+      socket.on('hospital_response', r=>{ log('Hospital response (socket): '+JSON.stringify(r)) })
+      socket.on('hospital_timeout', t=>{ log('Hospital timeout: '+JSON.stringify(t)) })
+    }
+  </script>
+</body>
+</html>

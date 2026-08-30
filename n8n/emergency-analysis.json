@@ -1,0 +1,75 @@
+{
+  "name": "MediRush Emergency Escalation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook/emergency-created",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.Webhook",
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "functionCode": "// prepare SMS payloads per hospital\nreturn items.map(i => ({ json: { hospital_phone: i.json.hospital_phone, accept_url: i.json.accept_url, emergency_id: i.json.emergency_id } }))"
+      },
+      "name": "Prepare",
+      "type": "n8n-nodes-base.Function",
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "to": "={{$json.hospital_phone}}",
+        "message": "Emergency near {{$json.emergency_location.lat}},{{$json.emergency_location.lng}}. Reply/accept: {{$json.accept_url}}"
+      },
+      "name": "Send SMS (Twilio)",
+      "type": "n8n-nodes-base.Twilio",
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "waitTime": 30
+      },
+      "name": "Wait 30s",
+      "type": "n8n-nodes-base.Wait",
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "functionCode": "// This node would call backend to check if notification was accepted\nreturn items"
+      },
+      "name": "Check Accepted",
+      "type": "n8n-nodes-base.Function",
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "resource": "call",
+        "operation": "create",
+        "to": "={{$json.hospital_phone}}",
+        "from": "=process.env.TWILIO_FROM",
+        "url": "={{$json.call_twiml_url}}"
+      },
+      "name": "Call (Twilio)",
+      "type": "n8n-nodes-base.Twilio",
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          { "node": "Prepare", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Prepare": { "main": [[{ "node": "Send SMS (Twilio)", "type": "main", "index": 0 }]] },
+    "Send SMS (Twilio)": { "main": [[{ "node": "Wait 30s", "type": "main", "index": 0 }]] },
+    "Wait 30s": { "main": [[{ "node": "Check Accepted", "type": "main", "index": 0 }]] },
+    "Check Accepted": { "main": [[{ "node": "Call (Twilio)", "type": "main", "index": 0 }]] }
+  }
+}

@@ -1,0 +1,126 @@
+{
+  "name": "MediRush - LLM Resource Extraction and Hospital Assessment",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook/emergency-created"
+      },
+      "name": "Webhook - Emergency Created",
+      "type": "n8n-nodes-base.Webhook",
+      "typeVersion": 1,
+      "position": [250, 250]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "requestBody": "{{{ $json.description }}}",
+        "options": {}
+      },
+      "name": "LLM - Extract Resources",
+      "type": "n8n-nodes-base.OpenAI",
+      "typeVersion": 1,
+      "position": [520, 250]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "url": "={{$json["body"]["lat"] ? `http://localhost:3001/api/hospitals?lat=${$json.body.lat}&lng=${$json.body.lng}&range=${$json.body.radius_meters}` : `http://localhost:3001/api/hospitals`}}",
+        "options": {}
+      },
+      "name": "HTTP - Find Nearby Hospitals",
+      "type": "n8n-nodes-base.HttpRequest",
+      "typeVersion": 1,
+      "position": [820, 250]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "={{$json}}",
+        "splitInto": "items",
+        "keepOnlySet": false
+      },
+      "name": "Split In Batches - Hospitals",
+      "type": "n8n-nodes-base.SplitInBatches",
+      "typeVersion": 1,
+      "position": [1060, 250]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "url": "=http://localhost:3001/api/v1/hospitals/${$json.id}/resources",
+        "options": {}
+      },
+      "name": "HTTP - Hospital Resources",
+      "type": "n8n-nodes-base.HttpRequest",
+      "typeVersion": 1,
+      "position": [1300, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Deterministic availability check\nconst required = items[0].json.required_resources || items[0].json.resources_required || [];\nconst hospital = items[0].json;\nconst h = hospital.resources || hospital;\nlet missing = [];\nfor(const req of required){\n  if(req.type==='bed'){\n    const avail = (h.beds && (h.beds[req.subtype] && h.beds[req.subtype].available)) || (h.beds && h.beds[req.subtype.toLowerCase()] && h.beds[req.subtype.toLowerCase()].available) || 0;\n    if(avail < req.count) missing.push({ item: `bed:${req.subtype}`, needed: req.count, available: avail });\n  } else if(req.type==='blood_units'){\n    const avail = (h.blood_units && (h.blood_units[req.subtype] || 0));\n    if(avail < req.count) missing.push({ item: `blood:${req.subtype}`, needed: req.count, available: avail });\n  } else if(req.type==='specialist'){\n    const doctors = (h.doctors || []).filter(d => d.specialization && d.specialization.toLowerCase().includes(req.subtype.toLowerCase()));\n    const oncall = doctors.filter(d => d.on_call).length;\n    if(oncall < req.count) missing.push({ item: `specialist:${req.subtype}`, needed: req.count, available: oncall });\n  } else if(req.type==='equipment'){\n    const has = (h.equipment || []).includes(req.subtype);
+    if(!has) missing.push({ item: `equipment:${req.subtype}`, needed: 1, available: 0 })
+  }
+}\nconst deterministic_ok = missing.length===0;\nreturn [{ json: { hospital: hospital, deterministic_ok, missing_items: missing } }];"
+      },
+      "name": "Function - Deterministic Check",
+      "type": "n8n-nodes-base.Function",
+      "typeVersion": 1,
+      "position": [1560, 200]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "requestBody": "{{{ JSON.stringify({ required: $json.required_resources, hospital: $json.hospital.resources || $json.hospital, deterministic: $json.deterministic_ok, missing: $json.missing_items }) }}}",
+        "options": {}
+      },
+      "name": "LLM - Hospital Assessment",
+      "type": "n8n-nodes-base.OpenAI",
+      "typeVersion": 1,
+      "position": [1820, 200]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "url": "=http://localhost:3001/api/v1/emergency/${$json["body"]["emergency_id"]}/notify-hospital",
+        "options": {
+          "bodyContentType": "json",
+          "body": "=({ hospital_id: $json.id, accept: JSON.parse($json[\"LLM - Hospital Assessment\"] || '{}').accept || ( $json.deterministic_ok === true ), details: JSON.parse($json[\"LLM - Hospital Assessment\"] || '{}') })"
+        }
+      },
+      "name": "HTTP - Post Decision to Backend",
+      "type": "n8n-nodes-base.HttpRequest",
+      "typeVersion": 1,
+      "position": [2080, 200]
+    },
+    {
+      "parameters": {
+        "fieldName": "accepted_hospitals",
+        "fieldValue": "={{$json}}"
+      },
+      "name": "Aggregate Accepts",
+      "type": "n8n-nodes-base.Set",
+      "typeVersion": 1,
+      "position": [2360, 200]
+    }
+  ],
+  "connections": {
+    "Webhook - Emergency Created": {
+      "main": [
+        [
+          {
+            "node": "LLM - Extract Resources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Extract Resources": { "main": [[{ "node": "HTTP - Find Nearby Hospitals", "type": "main", "index": 0 }]] },
+    "HTTP - Find Nearby Hospitals": { "main": [[{ "node": "Split In Batches - Hospitals", "type": "main", "index": 0 }]] },
+    "Split In Batches - Hospitals": { "main": [[{ "node": "HTTP - Hospital Resources", "type": "main", "index": 0 }]] },
+    "HTTP - Hospital Resources": { "main": [[{ "node": "Function - Deterministic Check", "type": "main", "index": 0 }]] },
+    "Function - Deterministic Check": { "main": [[{ "node": "LLM - Hospital Assessment", "type": "main", "index": 0 }]] },
+    "LLM - Hospital Assessment": { "main": [[{ "node": "HTTP - Post Decision to Backend", "type": "main", "index": 0 }]] },
+    "HTTP - Post Decision to Backend": { "main": [[{ "node": "Aggregate Accepts", "type": "main", "index": 0 }]] }
+  }
+}

@@ -1,0 +1,286 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model audit_logs {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_type   String    @db.VarChar(20)
+  user_id     String    @db.Uuid
+  action      String    @db.VarChar(255)
+  entity_name String?   @db.VarChar(100)
+  entity_id   String?   @db.Uuid
+  ip_address  String?   @db.VarChar(100)
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model device_tokens {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_type    String    @db.VarChar(20)
+  user_id      String    @db.Uuid
+  device_token String
+  platform     String?   @db.VarChar(20)
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model emergency_dispatch {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  request_id         String             @db.Uuid
+  hospital_id        String             @db.Uuid
+  dispatch_status    String             @default("PENDING") @db.VarChar(20)
+  dispatched_at      DateTime?          @default(now()) @db.Timestamp(6)
+  delivered_at       DateTime?          @db.Timestamp(6)
+  response_deadline  DateTime?          @db.Timestamp(6)
+  retry_count        Int?               @default(0)
+  last_retry_at      DateTime?          @db.Timestamp(6)
+  socket_id          String?            @db.VarChar(255)
+  error_message      String?
+  created_at         DateTime?          @default(now()) @db.Timestamp(6)
+  hospitals          hospitals          @relation(fields: [hospital_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_dispatch_hospital")
+  emergency_requests emergency_requests @relation(fields: [request_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_dispatch_request")
+
+  @@unique([request_id, hospital_id], map: "unique_dispatch")
+  @@index([hospital_id], map: "idx_dispatch_hospital")
+  @@index([request_id], map: "idx_dispatch_request")
+}
+
+model emergency_requests {
+  id                     String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id             String                   @db.Uuid
+  is_self                 Boolean  @default(true)
+  victim_name             String?  @db.VarChar(255)
+  victim_age              Int?
+  victim_gender          String?  @db.VarChar(20)
+  victim_phone           String?  @db.VarChar(15)
+  description            String
+  latitude               Decimal                  @db.Decimal(10, 8)
+  longitude              Decimal                  @db.Decimal(11, 8)
+  search_radius_km       Int
+  selected_hospital_id   String?                  @db.Uuid
+  status                 String                   @default("SEARCHING") @db.VarChar(30)
+  created_at             DateTime?                @default(now()) @db.Timestamp(6)
+  updated_at             DateTime?                @default(now()) @db.Timestamp(6)
+  emergency_dispatch     emergency_dispatch[]
+  users               users                 @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_user")
+  hospitals              hospitals?               @relation(fields: [selected_hospital_id], references: [id], onUpdate: NoAction, map: "fk_selected_hospital")
+  emergency_requirements emergency_requirements[]
+  hospital_responses     hospital_responses[]
+  payments               payments[]
+  qr_admissions          qr_admissions?
+
+  @@index([user_id], map: "idx_emergency_user")
+  @@index([status], map: "idx_emergency_status")
+}
+
+model emergency_requirements {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  request_id         String             @db.Uuid
+  requirement_name   String             @db.VarChar(100)
+  required_quantity  Int?               @default(1)
+  created_at         DateTime?          @default(now()) @db.Timestamp(6)
+  emergency_requests emergency_requests @relation(fields: [request_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_emergency_requirements")
+}
+
+model hospital_departments {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  hospital_id     String    @db.Uuid
+  department_name String    @db.VarChar(100)
+  is_available    Boolean?  @default(true)
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  updated_at      DateTime? @default(now()) @db.Timestamp(6)
+  hospitals       hospitals @relation(fields: [hospital_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_hospital_departments")
+
+  @@unique([hospital_id, department_name], map: "unique_hospital_department")
+}
+
+model hospital_doctors {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  hospital_id       String    @db.Uuid
+  specialization    String    @db.VarChar(100)
+  total_doctors     Int?      @default(0)
+  available_doctors Int?      @default(0)
+  on_duty_doctors   Int?      @default(0)
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+  updated_at        DateTime? @default(now()) @db.Timestamp(6)
+  hospitals         hospitals @relation(fields: [hospital_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_hospital_doctors")
+
+  @@unique([hospital_id, specialization], map: "unique_hospital_specialization")
+}
+
+model hospital_equipment {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  hospital_id        String    @db.Uuid
+  equipment_name     String    @db.VarChar(100)
+  total_quantity     Int?      @default(0)
+  available_quantity Int?      @default(0)
+  is_operational     Boolean?  @default(true)
+  created_at         DateTime? @default(now()) @db.Timestamp(6)
+  updated_at         DateTime? @default(now()) @db.Timestamp(6)
+  hospitals          hospitals @relation(fields: [hospital_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_hospital_equipment")
+
+  @@unique([hospital_id, equipment_name], map: "unique_hospital_equipment")
+}
+
+model hospital_profiles {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  hospital_id       String    @unique @db.Uuid
+  address           String
+  city              String    @db.VarChar(100)
+  state             String    @db.VarChar(100)
+  country           String?   @default("India") @db.VarChar(100)
+  pincode           String?   @db.VarChar(10)
+  latitude          Decimal   @db.Decimal(10, 8)
+  longitude         Decimal   @db.Decimal(11, 8)
+  emergency_contact String?   @db.VarChar(15)
+  website           String?   @db.VarChar(255)
+  license_number    String?   @db.VarChar(100)
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+  updated_at        DateTime? @default(now()) @db.Timestamp(6)
+  hospitals         hospitals @relation(fields: [hospital_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_hospital_profile")
+}
+
+model hospital_resources {
+  id                           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  hospital_id                  String    @unique @db.Uuid
+  total_beds                   Int?      @default(0)
+  available_beds               Int?      @default(0)
+  total_icu_beds               Int?      @default(0)
+  available_icu_beds           Int?      @default(0)
+  total_emergency_beds         Int?      @default(0)
+  available_emergency_beds     Int?      @default(0)
+  total_ventilators            Int?      @default(0)
+  available_ventilators        Int?      @default(0)
+  total_operation_theatres     Int?      @default(0)
+  available_operation_theatres Int?      @default(0)
+  total_ambulances             Int?      @default(0)
+  available_ambulances         Int?      @default(0)
+  blood_bank_available         Boolean?  @default(false)
+  created_at                   DateTime? @default(now()) @db.Timestamp(6)
+  updated_at                   DateTime? @default(now()) @db.Timestamp(6)
+  hospitals                    hospitals @relation(fields: [hospital_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_hospital_resources")
+}
+
+model hospital_responses {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  request_id         String             @db.Uuid
+  hospital_id        String             @db.Uuid
+  status             String             @default("PENDING") @db.VarChar(20)
+  score              Decimal?           @db.Decimal(5, 2)
+  response_time_ms   Int?
+  rejection_reason   String?
+  responded_at       DateTime?          @db.Timestamp(6)
+  created_at         DateTime?          @default(now()) @db.Timestamp(6)
+  hospitals          hospitals          @relation(fields: [hospital_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_response_hospital")
+  emergency_requests emergency_requests @relation(fields: [request_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_response_request")
+
+  @@unique([request_id, hospital_id], map: "unique_request_hospital")
+  @@index([hospital_id], map: "idx_response_hospital")
+  @@index([request_id], map: "idx_response_request")
+}
+
+model hospitals {
+  id                   String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  hospital_name        String                 @db.VarChar(255)
+  email                String                 @unique @db.VarChar(255)
+  phone                String                 @unique @db.VarChar(15)
+  password_hash        String
+  registration_number  String?                 @unique @db.VarChar(100)
+  hospital_type        String?                @db.VarChar(50)
+  is_verified          Boolean?               @default(false)
+  profile_completed    Boolean?               @default(false)
+  created_at           DateTime?              @default(now()) @db.Timestamp(6)
+  updated_at           DateTime?              @default(now()) @db.Timestamp(6)
+  emergency_dispatch   emergency_dispatch[]
+  emergency_requests   emergency_requests[]
+  hospital_departments hospital_departments[]
+  hospital_doctors     hospital_doctors[]
+  hospital_equipment   hospital_equipment[]
+  hospital_profiles    hospital_profiles?
+  hospital_resources   hospital_resources?
+  hospital_responses   hospital_responses[]
+  payments             payments[]
+  qr_admissions        qr_admissions[]
+  resource_history     resource_history[]
+
+  @@index([email], map: "idx_hospital_email")
+  @@index([phone], map: "idx_hospital_phone")
+}
+
+model notifications {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  recipient_type String    @db.VarChar(20)
+  recipient_id   String    @db.Uuid
+  title          String    @db.VarChar(255)
+  message        String
+  is_read        Boolean?  @default(false)
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model users {
+  id                      String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  full_name               String               @db.VarChar(255)
+  email                   String?              @unique @db.VarChar(255)
+  phone                   String               @unique @db.VarChar(15)
+  password_hash           String?
+  date_of_birth           DateTime?            @db.Date
+  gender                  String?              @db.VarChar(20)
+  blood_group             String?              @db.VarChar(10)
+  emergency_contact_name  String?              @db.VarChar(255)
+  emergency_contact_phone String?              @db.VarChar(15)
+  allergies               String?
+  medical_conditions      String?
+  created_at              DateTime?            @default(now()) @db.Timestamp(6)
+  updated_at              DateTime?            @default(now()) @db.Timestamp(6)
+  emergency_requests      emergency_requests[]
+  payments                payments[]
+  qr_admissions           qr_admissions[]
+
+  @@index([phone], map: "idx_user_phone")
+}
+
+model payments {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  request_id         String             @db.Uuid
+  user_id         String             @db.Uuid
+  hospital_id        String             @db.Uuid
+  amount             Decimal            @db.Decimal(10, 2)
+  currency           String?            @default("INR") @db.VarChar(10)
+  payment_status     String?            @default("PENDING") @db.VarChar(20)
+  payment_provider   String?            @db.VarChar(50)
+  transaction_id     String?            @db.VarChar(255)
+  paid_at            DateTime?          @db.Timestamp(6)
+  created_at         DateTime?          @default(now()) @db.Timestamp(6)
+  hospitals          hospitals          @relation(fields: [hospital_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_payment_hospital")
+  users           users           @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_payment_user")
+  emergency_requests emergency_requests @relation(fields: [request_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_payment_request")
+}
+
+model qr_admissions {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  request_id         String             @unique @db.Uuid
+  user_id         String             @db.Uuid
+  hospital_id        String             @db.Uuid
+  qr_token           String             @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  is_verified        Boolean?           @default(false)
+  expires_at         DateTime           @db.Timestamp(6)
+  verified_at        DateTime?          @db.Timestamp(6)
+  created_at         DateTime?          @default(now()) @db.Timestamp(6)
+  hospitals          hospitals          @relation(fields: [hospital_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_qr_hospital")
+  users           users           @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_qr_user")
+  emergency_requests emergency_requests @relation(fields: [request_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_qr_request")
+}
+
+model resource_history {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  hospital_id   String    @db.Uuid
+  resource_type String    @db.VarChar(100)
+  old_value     Int?
+  new_value     Int?
+  updated_by    String?   @db.Uuid
+  updated_at    DateTime? @default(now()) @db.Timestamp(6)
+  hospitals     hospitals @relation(fields: [hospital_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_history_hospital")
+}

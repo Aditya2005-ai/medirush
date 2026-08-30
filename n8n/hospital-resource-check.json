@@ -1,0 +1,315 @@
+{
+  "name": "MediRush - Gemini Resource Extraction and Hospital Assessment",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook/emergency-created"
+      },
+      "name": "Webhook - Emergency Created",
+      "type": "n8n-nodes-base.Webhook",
+      "typeVersion": 1,
+      "position": [250, 250]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "url": "={{ $env.GEMINI_ENDPOINT }}",
+        "options": {},
+        "bodyParametersJson": "={\n  \"instances\": [\n    { \"content\": `System: You are a medical triage assistant.\nParse the emergency description and RETURN ONLY JSON matching the schema: {\"urgency\":\"low|medium|high|critical\", \"resource_requirements\": [{\"type\":\"bed|specialist|blood_units|equipment|procedure|other\",\"subtype\":\"...\",\"count\":1,\"min_count\":1,\"notes\":\"...\"}], \"free_text_tags\":[] }\nDescription: ${$json[\"body\"][\"description\"]}\nProvide only JSON.` }\n  ],\n  \"parameters\": { \"temperature\": 0.0, \"maxOutputTokens\": 800 }\n}"
+      },
+      "name": "HTTP - Gemini Extract Resources",
+      "type": "n8n-nodes-base.HttpRequest",
+      "typeVersion": 1,
+      "position": [520, 250]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Parse Gemini HTTP response to extract model-generated text and parse JSON\nconst raw = items[0].json;\n// Try common response shapes used by GenAI/Vertex AI\nlet text = null;\nif(raw.predictions && raw.predictions[0] && raw.predictions[0].content) text = raw.predictions[0].content;\nelse if(raw[0] && raw[0].candidates && raw[0].candidates[0] && raw[0].candidates[0].content) text = raw[0].candidates[0].content;\nelse if(raw.output && raw.output[0] && raw.output[0].content) text = raw.output[0].content;\nelse if(raw.content) text = raw.content;\nelse if(typeof raw === 'string') text = raw;\nelse text = JSON.stringify(raw);\n\n// Trim common wrappers (code fences)\ntext = text.replace(/^```json\n?|\n?```$/g, '').trim();\nlet parsed;\ntry{ parsed = JSON.parse(text); }catch(err){ throw new Error('Failed to parse model output as JSON: '+err.message+'\nModel output:\n'+text.slice(0,1500)); }\nreturn [{ json: parsed }];"
+      },
+      "name": "Parse Gemini Extract",
+      "type": "n8n-nodes-base.Function",
+      "typeVersion": 1,
+      "position": [760, 250]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Validate Schema A (Extract Resources)\nfunction validateExtract(obj){\n  if(!obj || typeof obj !== 'object') return 'Not an object';\n  if(!['low','medium','high','critical'].includes(obj.urgency)) return 'urgency invalid';\n  if(!Array.isArray(obj.resource_requirements)) return 'resource_requirements not array';\n  for(const r of obj.resource_requirements){\n    if(typeof r.type !== 'string') return 'requirement.type missing';\n    if(typeof r.subtype !== 'string') return 'requirement.subtype missing';\n    if(!Number.isInteger(r.count) || r.count < 0) return 'requirement.count invalid';\n    if(!Number.isInteger(r.min_count) || r.min_count < 0) return 'requirement.min_count invalid';\n  }\n  return null;\n}\nconst payload = items[0].json;\nconst error = validateExtract(payload);\nif(error) throw new Error('Schema A validation failed: '+error);\n// attach original webhook body for context if present\nreturn [{ json: { extracted: payload, original: $json["body"] } }];"
+      },
+      "name": "Validate Extract",
+      "type": "n8n-nodes-base.Function",
+      "typeVersion": 1,
+      "position": [1000, 250]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "url": "=($env.BACKEND_BASE || 'http://localhost:3001') + `/api/hospitals?lat=${$json["original"].lat}&lng=${$json["original"].lng}&range=${$json["original"].radius_meters}`",
+        "options": {}
+      },
+      "name": "HTTP - Find Nearby Hospitals",
+      "type": "n8n-nodes-base.HttpRequest",
+      "typeVersion": 1,
+      "position": [1240, 250]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "=JSON.parse($node[\"HTTP - Find Nearby Hospitals\"].json[\"body\"] || JSON.stringify($node[\"HTTP - Find Nearby Hospitals\"].json)).length ? JSON.parse($node[\"HTTP - Find Nearby Hospitals\"].json[\"body\"]) : $node[\"HTTP - Find Nearby Hospitals\"].json",
+        "splitInto": "items",
+        "keepOnlySet": false
+      },
+      "name": "Split In Batches - Hospitals",
+      "type": "n8n-nodes-base.SplitInBatches",
+      "typeVersion": 1,
+      "position": [1500, 250]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "url": "=($env.BACKEND_BASE || 'http://localhost:3001') + `/api/v1/hospitals/${$json["id"]}/resources`",
+        "options": {}
+      },
+      "name": "HTTP - Hospital Resources",
+      "type": "n8n-nodes-base.HttpRequest",
+      "typeVersion": 1,
+      "position": [1760, 240]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Deterministic availability check\nconst hospitalRaw = $node['HTTP - Hospital Resources'].json;\n// many HTTP nodes return the response under .json or .body; normalize\nconst hospital = (hospitalRaw && hospitalRaw.json) ? hospitalRaw.json : hospitalRaw;\nconst resources = hospital.resources || hospital;\n// Retrieve extracted requirements from earlier node\nconst extracted = $node['Validate Extract'].json.extracted;\nconst required = extracted.resource_requirements || [];\nlet missing = [];\nfor(const req of required){\n  const t = req.type;\n  const subtype = req.subtype || '';\n  const needed = req.count || 0;\n  if(t === 'bed'){
+    const bed = (resources.beds && (resources.beds[subtype] || resources.beds[subtype.toLowerCase()])) || null;
+    const avail = bed ? (bed.available || 0) : 0;
+    if(avail < needed) missing.push({ item:`bed:${subtype}`, needed, available: avail});
+  } else if(t === 'blood_units'){
+    const avail = (resources.blood_units && (resources.blood_units[subtype] || 0)) || 0;
+    if(avail < needed) missing.push({ item:`blood:${subtype}`, needed, available: avail});
+  } else if(t === 'specialist'){
+    const doctors = (resources.doctors || []).filter(d => (d.specialization||'').toLowerCase().includes(subtype.toLowerCase()));
+    const oncall = doctors.filter(d => d.on_call).length;
+    if(oncall < needed) missing.push({ item:`specialist:${subtype}`, needed, available: oncall});
+  } else if(t === 'equipment'){
+    const has = (resources.equipment || []).includes(subtype);
+    if(!has) missing.push({ item:`equipment:${subtype}`, needed: 1, available: 0});
+  } else {
+    missing.push({ item:`unknown:${subtype}`, needed, available: 0});
+  }
+}
+const deterministic_ok = missing.length === 0;
+return [{ json: { hospital: hospital, deterministic_ok, missing_items: missing, extracted: extracted } }];"
+      },
+      "name": "Function - Deterministic Check",
+      "type": "n8n-nodes-base.Function",
+      "typeVersion": 1,
+      "position": [2020, 240]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "url": "={{ $env.GEMINI_ENDPOINT }}",
+        "options": {},
+        "bodyParametersJson": "={\n  \"instances\": [\n    { \"content\": `System: You are a clinical availability assessor. Given the following required resources, hospital resources snapshot, and deterministic check, return ONLY JSON following Schema B: {accept:boolean, missing_items: [{item, needed, available}], prep_eta_minutes:int, payment_estimate_cents:int, confidence:0-1, notes:string}.\nInput: ${JSON.stringify({ required: $json.extracted.resource_requirements, hospital: $json.hospital.resources || $json.hospital, deterministic: $json.deterministic_ok, missing: $json.missing_items, distance_m: $json.hospital.distance_m })}` }
+  ],\n  \"parameters\": { \"temperature\": 0.0, \"maxOutputTokens\": 400 }\n}"
+      },
+      "name": "HTTP - Gemini Assessment",
+      "type": "n8n-nodes-base.HttpRequest",
+      "typeVersion": 1,
+      "position": [2280, 240]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Parse Gemini Assessment response\nconst raw = items[0].json;\nlet text = null;\nif(raw.predictions && raw.predictions[0] && raw.predictions[0].content) text = raw.predictions[0].content;\nelse if(raw[0] && raw[0].candidates && raw[0].candidates[0] && raw[0].candidates[0].content) text = raw[0].candidates[0].content;\nelse if(raw.output && raw.output[0] && raw.output[0].content) text = raw.output[0].content;\nelse if(raw.content) text = raw.content;\nelse text = JSON.stringify(raw);\ntext = text.replace(/^```json\\n?|\\n?```$/g, '').trim();\nlet parsed;\ntry{ parsed = JSON.parse(text); }catch(err){ throw new Error('Failed to parse Gemini assessment JSON: '+err.message+'\nOutput: '+text.slice(0,1500)); }\nreturn [{ json: parsed }];"
+      },
+      "name": "Parse Gemini Assessment",
+      "type": "n8n-nodes-base.Function",
+      "typeVersion": 1,
+      "position": [2520, 240]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Validate Schema B (Hospital Assessment)\nfunction validateAssessment(obj){\n  if(!obj || typeof obj !== 'object') return 'Not an object';\n  if(typeof obj.accept !== 'boolean') return 'accept missing';\n  if(!Array.isArray(obj.missing_items)) return 'missing_items not array';\n  if(!Number.isInteger(obj.prep_eta_minutes) || obj.prep_eta_minutes < 0) return 'prep_eta_minutes invalid';\n  if(!Number.isInteger(obj.payment_estimate_cents) || obj.payment_estimate_cents < 0) return 'payment_estimate_cents invalid';\n  if(typeof obj.confidence !== 'number' || obj.confidence < 0 || obj.confidence > 1) return 'confidence invalid';\n  if(typeof obj.notes !== 'string') return 'notes missing';\n  for(const m of obj.missing_items){\n    if(typeof m.item !== 'string') return 'missing_items.item missing';\n    if(!Number.isInteger(m.needed) || m.needed < 0) return 'missing_items.needed invalid';\n    if(!Number.isInteger(m.available) || m.available < 0) return 'missing_items.available invalid';\n  }\n  return null;\n}\nconst payload = items[0].json;\nconst error = validateAssessment(payload);\nif(error) throw new Error('Schema B validation failed: '+error);\nreturn [{ json: payload }];"
+      },
+      "name": "Validate Assessment",
+      "type": "n8n-nodes-base.Function",
+      "typeVersion": 1,
+      "position": [2760, 240]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Decide final acceptance combining deterministic check and LLM assessment\nconst llm = $node['Validate Assessment'].json;\nconst det = $node['Function - Deterministic Check'].json;\n// Policy: accept if deterministic_ok OR (llm.accept AND llm.confidence >= 0.9)\nconst finalAccept = det.deterministic_ok || (llm.accept === true && llm.confidence >= 0.9);\nconst emergency = $node['Validate Extract'].json.original;\nreturn [{ json: { hospital_id: det.hospital.id, emergency_id: emergency.emergency_id || emergency.id || null, accept: finalAccept, details: { deterministic: det, llm: llm, finalAccept: finalAccept } } }];"
+      },
+      "name": "Function - Decide Final",
+      "type": "n8n-nodes-base.Function",
+      "typeVersion": 1,
+      "position": [3020, 240]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "url": "=($env.BACKEND_BASE || 'http://localhost:3001') + `/api/v1/emergency/${$json["emergency_id"]}/notify-hospital`",
+        "options": {
+          "bodyContentType": "json",
+          "body": "={ hospital_id: $json.hospital_id, accept: $json.accept, details: $json.details }"
+        }
+      },
+      "name": "HTTP - Post Decision to Backend",
+      "type": "n8n-nodes-base.HttpRequest",
+      "typeVersion": 1,
+      "position": [3280, 240]
+    },
+    {
+      "parameters": {
+        "fieldName": "accepted_hospitals",
+        "fieldValue": "=[$node['Function - Decide Final'].json]"
+      },
+      "name": "Aggregate Accepts",
+      "type": "n8n-nodes-base.Set",
+      "typeVersion": 1,
+      "position": [3540, 240]
+    }
+  ],
+  "connections": {
+    "Webhook - Emergency Created": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Gemini Extract Resources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Gemini Extract Resources": {
+      "main": [
+        [
+          {
+            "node": "Parse Gemini Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Gemini Extract": {
+      "main": [
+        [
+          {
+            "node": "Validate Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Extract": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Find Nearby Hospitals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Find Nearby Hospitals": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches - Hospitals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches - Hospitals": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Hospital Resources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Hospital Resources": {
+      "main": [
+        [
+          {
+            "node": "Function - Deterministic Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Deterministic Check": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Gemini Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Gemini Assessment": {
+      "main": [
+        [
+          {
+            "node": "Parse Gemini Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Gemini Assessment": {
+      "main": [
+        [
+          {
+            "node": "Validate Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Assessment": {
+      "main": [
+        [
+          {
+            "node": "Function - Decide Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Decide Final": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Post Decision to Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Post Decision to Backend": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Accepts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

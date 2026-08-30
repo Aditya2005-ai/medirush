@@ -1,0 +1,38 @@
+{
+  "name": "Emergency Notification Flow (MediRush)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook/emergency-created"
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.Webhook",
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "to": "={{$json[\"hospital_phone\"]}}",
+        "message": "Emergency request near {{$json.location.lat}},{{$json.location.lng}}. Reply by clicking: {{$json.accept_url}}"
+      },
+      "name": "Send SMS",
+      "type": "n8n-nodes-base.Twilio",
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Send SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
